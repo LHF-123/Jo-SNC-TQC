@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 import torchvision
 from utils.utils import init_weights
-from utils.pre_act_resnet import PreActResNet18Encoder
 from utils.InceptionResNetV2 import InceptionResNetV2, HF_InceptionResNetV2_Encoder
 
 
@@ -109,6 +108,7 @@ class Encoder(nn.Module):
             self.encoder = nn.Sequential(*list(resnet.children())[:-1])
             self.feature_dim = resnet.fc.in_features
         elif arch.startswith('preact_resnet18'):
+            from utils.pre_act_resnet import PreActResNet18Encoder
             pre_act_resnet = PreActResNet18Encoder()
             self.encoder = pre_act_resnet.encoder
             self.feature_dim = 512
