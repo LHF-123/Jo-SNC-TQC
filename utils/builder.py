@@ -20,7 +20,6 @@ from data.noisy_cifar import NoisyCIFAR10, NoisyCIFAR100
 from data.image_folder import IndexedImageFolder
 from data.food101 import Food101
 from data.food101n import Food101N
-from data.clothing1m import Clothing1M
 from data.webvision import webvision_dataset, imagenet_dataset
 from data.anmal10n import Animal10N
 from PIL import ImageFilter
@@ -150,6 +149,7 @@ def build_food101n_dataset(root, train_transform, test_transform):
 
 
 def build_clothing1m_dataset(root, train_transform, test_transform):
+    from data.clothing1m import Clothing1M
     train_data = Clothing1M(root, split='train', transform=train_transform)
     valid_data = Clothing1M(root, split='val', transform=test_transform)
     test_data = Clothing1M(root, split='test', transform=test_transform)
