@@ -16,8 +16,8 @@ crop_size: 448
 arch: resnet50
 # 优化器类型；当前使用 SGD。
 opt: sgd
-# 每张 GPU 的 batch size；对齐 scripts/bird.sh。
-batch_size: 32
+# 每张 GPU 的 batch size；当前按显存调整为 56。
+batch_size: 56
 # 总训练 epoch 数。
 epochs: 120
 # 主学习率。
@@ -34,6 +34,8 @@ warmup_lr_plan: constant
 weight_decay: 3.0e-4
 # 是否使用 mixed precision 训练。
 use_fp16: True
+# 是否显示训练和评估 tqdm 进度条。
+enable_progress_bar: True
 # 模型投影/特征维度；对齐 scripts/bird.sh 的 fdim=512。
 fdim: 512
 # MLP hidden 倍率；传给 DualHeadModel。
