@@ -6,11 +6,13 @@ import os
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image, ImageFile
 from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets import ImageFolder
 from tqdm import tqdm
 
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 DEFAULT_CLASS_PROMPTS = [
     'a photo of a {class_name}',
@@ -45,12 +47,20 @@ class ImagePathDataset(Dataset):
 
     def __getitem__(self, index):
         path, label = self.samples[index]
-        image = Image.open(path).convert('RGB')
+        bad_image = False
+        try:
+            with Image.open(path) as image_file:
+                image = image_file.convert('RGB')
+        except Exception as exc:
+            bad_image = True
+            image = Image.new('RGB', (224, 224), 'black')
+            print(f'[Warning] failed to read image, using black placeholder: index={index}, path={path}, error={exc}', flush=True)
         return {
             'index': index,
             'image': self.preprocess(image),
             'label': label,
             'path': path,
+            'bad_image': bad_image,
         }
 
 
@@ -99,13 +109,23 @@ def encode_texts(model, tokenize, texts, device, batch_size):
 def encode_images(model, dataset, device, batch_size, num_workers):
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
     feats = []
+    bad_records = []
     with torch.no_grad():
         for sample in tqdm(loader, ncols=100, ascii=' >', desc='CLIP image features'):
             images = sample['image'].to(device)
             image_features = model.encode_image(images)
             image_features = F.normalize(image_features.float(), dim=1)
             feats.append(image_features.cpu())
-    return torch.cat(feats, dim=0).numpy()
+            bad_flags = sample.get('bad_image', None)
+            if bad_flags is not None:
+                bad_flags = bad_flags.detach().cpu().numpy().astype(bool)
+                indices = sample['index'].detach().cpu().numpy().tolist()
+                labels = sample['label'].detach().cpu().numpy().tolist()
+                paths = sample['path']
+                for flag, index, label, path in zip(bad_flags, indices, labels, paths):
+                    if flag:
+                        bad_records.append((index, path, label))
+    return torch.cat(feats, dim=0).numpy(), bad_records
 
 
 def write_samples_csv(path, samples, classes):
@@ -152,13 +172,19 @@ def main():
     domain_prompt = args.domain_prompt or DOMAIN_PROMPTS[args.dataset]
     domain_features = encode_texts(model, tokenize, [domain_prompt], device, args.text_batch_size)
     out_domain_features = encode_texts(model, tokenize, DEFAULT_OUT_DOMAIN_PROMPTS, device, args.text_batch_size)
-    image_features = encode_images(model, dataset, device, args.batch_size, args.num_workers)
+    image_features, bad_records = encode_images(model, dataset, device, args.batch_size, args.num_workers)
 
     np.save(os.path.join(args.output_dir, 'clip_image_features.npy'), image_features.astype(np.float32))
     np.save(os.path.join(args.output_dir, 'clip_text_features.npy'), class_text_features.astype(np.float32))
     np.save(os.path.join(args.output_dir, 'clip_domain_features.npy'), domain_features.astype(np.float32))
     np.save(os.path.join(args.output_dir, 'clip_out_domain_features.npy'), out_domain_features.astype(np.float32))
     write_samples_csv(os.path.join(args.output_dir, 'train_samples.csv'), image_folder.samples, image_folder.classes)
+    if len(bad_records) > 0:
+        with open(os.path.join(args.output_dir, 'bad_images.csv'), 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['index', 'image_path', 'label', 'class_name'])
+            for index, image_path, label in bad_records:
+                writer.writerow([index, image_path, label, image_folder.classes[label]])
 
     print('[Data]')
     print(f'num_samples = {len(image_folder.samples)}')
@@ -166,6 +192,8 @@ def main():
     print(f'dataset = {args.dataset}')
     print(f'clip_model = {args.clip_model}')
     print(f'output_dir = {args.output_dir}')
+    if len(bad_records) > 0:
+        print(f'[Warning] bad_images = {len(bad_records)}; details saved to bad_images.csv')
 
 
 if __name__ == '__main__':
