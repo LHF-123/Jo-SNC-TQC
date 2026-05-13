@@ -65,11 +65,22 @@ samples_out_domain.jpg
 python main.py --cfg config/bird_tqc_b0.yaml --gpu 0
 ```
 
+B0 的 `loss_mode` 是 `ce_baseline`，不读取 `sample_group.json` 和 `soft_labels.npy`。它用于和 TQC 分组方法做公平 baseline 对比。
+
 ## 4. 跑 B1：Anchor only
 
 ```powershell
 python main.py --cfg config/bird_tqc_b1.yaml --gpu 0
 ```
+
+B1 读取：
+
+```text
+tqc_group_path: sample_group.json
+tqc_sibling_path: sibling_dict.json
+```
+
+训练只使用 `group == anchor` 的样本；`sibling_boundary` 和其他组都跳过。
 
 ## 5. 跑 B2：Anchor + sibling hard CE
 
@@ -77,10 +88,51 @@ python main.py --cfg config/bird_tqc_b1.yaml --gpu 0
 python main.py --cfg config/bird_tqc_b2.yaml --gpu 0
 ```
 
+B2 读取：
+
+```text
+tqc_group_path: sample_group.json
+tqc_sibling_path: sibling_dict.json
+```
+
+训练使用 `anchor` 和 `sibling_boundary`，但两者都用 web label hard CE。
+
 ## 6. 跑 B3：Anchor + sibling soft CE
 
 ```powershell
 python main.py --cfg config/bird_tqc_b3.yaml --gpu 0
+```
+
+B3 读取：
+
+```text
+tqc_group_path: sample_group.json
+tqc_soft_label_path: soft_labels.npy
+tqc_sibling_path: sibling_dict.json
+```
+
+训练使用 `anchor` 的 hard CE，以及 `sibling_boundary` 的 CLIP soft label CE。
+
+## 训练时离线文件的使用方式
+
+```text
+sample_group.json
+  -> data/image_folder.py
+  -> batch["group"]
+  -> main.py 根据 loss_mode 选择 anchor / sibling_boundary / ignore
+
+soft_labels.npy
+  -> data/image_folder.py
+  -> batch["soft_label"]
+  -> 只在 B3 的 sibling soft CE 中使用
+
+sibling_dict.json
+  -> main.py 评估阶段
+  -> 计算 sibling_error_ratio
+
+sample_margins.csv / class_group_stats.csv
+  -> 复制进实验目录
+  -> 仅用于诊断和复盘，不参与训练 loss
 ```
 
 ## 训练日志重点
