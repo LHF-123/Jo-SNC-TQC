@@ -1,0 +1,46 @@
+# dataset
+data_root: ../datasets/
+dataset: web-bird
+n_classes: 200
+rescale_size: 448
+crop_size: 448
+
+# network & optimization
+arch: resnet18
+opt: sgd
+batch_size: 64
+epochs: 120
+lr: 0.01
+lr_decay: cosine:5,0.0,100
+warmup_epochs: 5
+warmup_lr: 0.01
+warmup_lr_plan: constant
+weight_decay: 1.0e-5
+use_fp16: True
+
+# V1 experiment
+loss_mode: anchor_sibling_hard
+lambda_sb: 0.5
+tqc_group_path: ../results/tqc_web_bird/sample_group.json
+tqc_margin_path: ../results/tqc_web_bird/sample_margins.csv
+tqc_class_stats_path: ../results/tqc_web_bird/class_group_stats.csv
+tqc_sibling_path: ../results/tqc_web_bird/sibling_dict.json
+tqc_stats_dir: ../results/tqc_web_bird
+clip_model: ViT-B/32
+K_s: 5
+K_f: 10
+tqc_r: 3
+domain_bottom: 10
+family_bottom: 20
+fine_high: 70
+fine_low: 20
+temperature: 0.1
+
+# hyper-params
+eps: 0.3
+alpha: 0.1
+
+# logging
+log_root: ../results/
+log_proj: TQC-V1
+log_name: B2_anchor_sibling_hard

@@ -229,12 +229,12 @@ def indices_list_to_indicator_vector(indices_list, num_samples):
 
 def get_stats(result_file):
     with open(result_file, 'r') as f:
-        lines = f.readlines()
+        lines = [line for line in f.readlines() if line.startswith('epoch')]
     test_acc_list = []
     test_acc_list2 = []
     valid_epoch = []
     # valid_epoch = [191, 192, 193, 194, 195, 196, 197, 198, 199, 200]
-    for idx in range(1, 11):
+    for idx in range(1, min(10, len(lines)) + 1):
         line = lines[-idx].strip()
         if 'test loss' in line:
             epoch, train_loss, train_acc, test_loss, test_acc = line.split(' | ')[:5]

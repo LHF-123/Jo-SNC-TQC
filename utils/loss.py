@@ -156,6 +156,19 @@ def negative_cross_entropy_loss(logits, false_labels, reduction='mean'):
         raise AssertionError('reduction has to be none, mean or sum')
 
 
+def soft_cross_entropy_loss(logits, soft_labels, reduction='mean', epsilon=1e-8):
+    losses = -torch.sum(soft_labels * F.log_softmax(logits, dim=1), dim=1)
+    if reduction == 'none':
+        return losses
+    elif reduction == 'mean':
+        normalizer = torch.clamp((soft_labels.sum(dim=1) > epsilon).float().sum(), min=1.0)
+        return torch.sum(losses) / normalizer
+    elif reduction == 'sum':
+        return torch.sum(losses)
+    else:
+        raise AssertionError('reduction has to be none, mean or sum')
+
+
 def reversed_cross_entropy(logits, labels, reduction='none'):
     """
     :param logits: shape: (N, C)

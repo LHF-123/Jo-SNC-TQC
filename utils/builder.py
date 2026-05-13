@@ -134,8 +134,9 @@ def build_cifar100n_dataset(root, train_transform, test_transform, noise_type, o
             'eval_train': eval_train_data}
 
 
-def build_webfg_dataset(root, train_transform, test_transform):
-    train_data = IndexedImageFolder(os.path.join(root, 'train'), transform=train_transform)
+def build_webfg_dataset(root, train_transform, test_transform, tqc_group_path=None, tqc_soft_label_path=None):
+    train_data = IndexedImageFolder(os.path.join(root, 'train'), transform=train_transform,
+                                    tqc_group_path=tqc_group_path, tqc_soft_label_path=tqc_soft_label_path)
     eval_train_data = IndexedImageFolder(os.path.join(root, 'train'), transform=test_transform)
     test_data = IndexedImageFolder(os.path.join(root, 'val'), transform=test_transform)
     return {'train': train_data, 'test': test_data, 'n_train_samples': len(train_data.samples), 'n_test_samples': len(test_data.samples),

@@ -9,6 +9,8 @@
 #
 # ================================================================
 import torch
+import os
+import csv
 from tqdm import tqdm
 from utils.utils import AverageMeter
 # from torchmetrics import Precision, Recall, F1Score
@@ -78,6 +80,70 @@ def evaluate(dataloader, model, dev, topk=(1,), progress_bar=False):
         return test_accuracy.avg, topk_accuracy.avg
     else:
         raise AssertionError(f'topk is set incorrectly (current topk is {topk})')
+
+
+def evaluate_detailed(dataloader, model, dev, num_classes, class_names=None, sibling_dict=None,
+                      output_dir=None, topk=(1, 5), progress_bar=False):
+    model.eval()
+    maxk = max(topk)
+    total = 0
+    top_correct = {k: 0.0 for k in topk}
+    per_class_total = torch.zeros(num_classes).long()
+    per_class_correct = torch.zeros(num_classes).long()
+    sibling_error = 0
+    total_error = 0
+
+    if sibling_dict is not None:
+        sibling_dict = {int(k): set(int(x) for x in v) for k, v in sibling_dict.items()}
+
+    with torch.no_grad():
+        pbar = tqdm(dataloader, ncols=100, ascii=' >', leave=False, desc='EVALUATING') if progress_bar else dataloader
+        for sample in pbar:
+            x = sample['data'].to(dev)
+            y = sample['label'].to(dev)
+            output = model(x)
+            logits = output[0] if isinstance(output, tuple) else output
+            _, pred = logits.topk(maxk, 1, True, True)
+            pred_t = pred.t()
+            correct = pred_t.eq(y.view(1, -1).expand_as(pred_t))
+            batch_size = y.size(0)
+            total += batch_size
+            for k in topk:
+                top_correct[k] += correct[:k].contiguous().view(-1).float().sum().item()
+
+            top1_pred = pred[:, 0]
+            top1_correct = top1_pred.eq(y)
+            for cls_id in y.unique().detach().cpu().tolist():
+                cls_mask = y == cls_id
+                per_class_total[cls_id] += cls_mask.sum().detach().cpu()
+                per_class_correct[cls_id] += top1_correct[cls_mask].sum().detach().cpu()
+
+            if sibling_dict is not None:
+                y_cpu = y.detach().cpu().tolist()
+                pred_cpu = top1_pred.detach().cpu().tolist()
+                for label, pred_label in zip(y_cpu, pred_cpu):
+                    if pred_label != label:
+                        total_error += 1
+                        if pred_label in sibling_dict.get(label, set()):
+                            sibling_error += 1
+
+    metrics = {f'top{k}': top_correct[k] * 100.0 / max(total, 1) for k in topk}
+    if sibling_dict is not None:
+        metrics['sibling_error_ratio'] = sibling_error * 100.0 / max(total_error, 1)
+
+    if output_dir is not None:
+        os.makedirs(output_dir, exist_ok=True)
+        class_names = class_names or [str(i) for i in range(num_classes)]
+        with open(os.path.join(output_dir, 'per_class_acc.csv'), 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['class_id', 'class_name', 'num_test', 'acc'])
+            for cls_id in range(num_classes):
+                cls_total = int(per_class_total[cls_id].item())
+                cls_correct = int(per_class_correct[cls_id].item())
+                cls_acc = cls_correct * 100.0 / max(cls_total, 1)
+                writer.writerow([cls_id, class_names[cls_id] if cls_id < len(class_names) else cls_id, cls_total, f'{cls_acc:.4f}'])
+
+    return metrics
 
 
 def detection_evaluate(prediction, ground_truth):

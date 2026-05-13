@@ -1,6 +1,7 @@
 easydict==1.10
 matplotlib==3.7.1
 numpy==1.23.1
+open_clip_torch==2.20.0
 Pillow==9.2.0
 PyYAML==6.0
 randaugment==1.0.2
