@@ -47,15 +47,15 @@ loss_mode: anchor_only
 lambda_sb: 0.5
 
 # TQC 分组文件；训练时读取 group id：0=ignore, 1=anchor, 2=sibling_boundary。
-tqc_group_path: ../results/tqc_web_bird/sample_group.json
+tqc_group_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sample_group.json
 # 样本 margin 明细；训练不读取，启动时复制进实验目录用于诊断。
-tqc_margin_path: ../results/tqc_web_bird/sample_margins.csv
+tqc_margin_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sample_margins.csv
 # 每类 group 统计；训练不读取，启动时复制进实验目录用于诊断。
-tqc_class_stats_path: ../results/tqc_web_bird/class_group_stats.csv
+tqc_class_stats_path: /root/Jo-SNC-TQC/results/tqc_web_bird/class_group_stats.csv
 # sibling 类别字典；评估阶段用于计算 sibling_error_ratio。
-tqc_sibling_path: ../results/tqc_web_bird/sibling_dict.json
+tqc_sibling_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sibling_dict.json
 # TQC 诊断目录；启动时复制标准 TQC 输出文件到实验目录。
-tqc_stats_dir: ../results/tqc_web_bird
+tqc_stats_dir: /root/Jo-SNC-TQC/results/qc_web_bird
 
 # 离线 CLIP 模型名称；用于记录分组配置。
 clip_model: ViT-B/32

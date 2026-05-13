@@ -47,17 +47,17 @@ loss_mode: anchor_sibling_soft
 lambda_sb: 0.5
 
 # TQC 分组文件；训练时读取 group id：0=ignore, 1=anchor, 2=sibling_boundary。
-tqc_group_path: ../results/tqc_web_bird/sample_group.json
+tqc_group_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sample_group.json
 # sibling-boundary soft label 矩阵；形状为 [N, C]，仅 B3 训练读取。
-tqc_soft_label_path: ../results/tqc_web_bird/soft_labels.npy
+tqc_soft_label_path: /root/Jo-SNC-TQC/results/tqc_web_bird/soft_labels.npy
 # 样本 margin 明细；训练不读取，启动时复制进实验目录用于诊断。
-tqc_margin_path: ../results/tqc_web_bird/sample_margins.csv
+tqc_margin_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sample_margins.csv
 # 每类 group 统计；训练不读取，启动时复制进实验目录用于诊断。
-tqc_class_stats_path: ../results/tqc_web_bird/class_group_stats.csv
+tqc_class_stats_path: /root/Jo-SNC-TQC/results/tqc_web_bird/class_group_stats.csv
 # sibling 类别字典；评估阶段用于计算 sibling_error_ratio。
-tqc_sibling_path: ../results/tqc_web_bird/sibling_dict.json
+tqc_sibling_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sibling_dict.json
 # TQC 诊断目录；启动时复制标准 TQC 输出文件到实验目录。
-tqc_stats_dir: ../results/tqc_web_bird
+tqc_stats_dir: /root/Jo-SNC-TQC/results/tqc_web_bird
 
 # 离线 CLIP 模型名称；用于记录分组配置。
 clip_model: ViT-B/32
@@ -76,7 +76,7 @@ fine_high: 70
 # fine margin 低阈值分位点；20 表示 < p20 的样本判为 fine_uncertain。
 fine_low: 20
 # 构造 sibling soft label 的 softmax 温度；值越小分布越尖锐。
-temperature: 0.1
+temperature: 0.02
 
 # label smoothing 参数；anchor hard CE 训练中用于构造平滑标签。
 eps: 0.1
