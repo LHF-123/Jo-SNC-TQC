@@ -949,6 +949,17 @@ def check_args(args):
         return True
 
 
+def collect_argparse_defaults(parser):
+    defaults = {}
+    for action in parser._actions:
+        if action.dest in ['help', 'cfg', 'gpu']:
+            continue
+        if action.default is not None and action.default is not argparse.SUPPRESS:
+            defaults[action.dest] = action.default
+            action.default = None
+    return defaults
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--cfg', type=str, required=True, help='configuration file path')
@@ -1026,11 +1037,13 @@ def parse_args():
     parser.add_argument('--conf-weight', action='store_true')
     parser.add_argument('--predefined-tau-clean', action='store_true')
 
+    default_args = collect_argparse_defaults(parser)
     parsed_args = parser.parse_args()
     cfg_path = parsed_args.cfg
     gpu = parsed_args.gpu
     parsed_args = {k: v for k, v in vars(parsed_args).items() if v is not None and k not in ['cfg', 'gpu']}
-    args = yaml.load(open(cfg_path, 'r'), Loader=yaml.FullLoader)
+    args = default_args
+    args.update(yaml.load(open(cfg_path, 'r'), Loader=yaml.FullLoader))
     args.update(parsed_args)
     assert check_args(args)
     return gpu, edict(args)
