@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
+import numpy as np
 from randaugment import CIFAR10Policy, ImageNetPolicy, Cutout, RandAugment
 from data.noisy_cifar import NoisyCIFAR10, NoisyCIFAR100
 from data.image_folder import IndexedImageFolder
@@ -23,6 +24,9 @@ from data.food101n import Food101N
 from data.webvision import webvision_dataset, imagenet_dataset
 from data.anmal10n import Animal10N
 from PIL import ImageFilter
+
+if not hasattr(np, 'int'):
+    np.int = int
 
 
 # dataset --------------------------------------------------------------------------------------------------------------------------------------------
