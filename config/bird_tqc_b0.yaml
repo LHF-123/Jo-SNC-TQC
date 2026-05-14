@@ -35,7 +35,7 @@ domain_bottom: 10  # domain margin 底部百分比阈值；低于该阈值判为
 family_bottom: 20  # 每类 family margin 底部百分比阈值；低于该阈值判为 family_mismatch。
 fine_high: 70  # fine margin 高阈值分位点；70 表示 >= p70 的样本判为 anchor。
 fine_low: 20  # fine margin 低阈值分位点；20 表示 < p20 的样本判为 fine_uncertain。
-temperature: 0.1  # 构造 sibling soft label 的 softmax 温度；B0 不使用，仅记录。
+temperature: 0.02  # 构造 sibling soft label 的 softmax 温度；B0 不使用，仅记录。
 
 eps: 0.1  # label smoothing 参数；B0 的 hard CE 训练中用于构造平滑标签。
 alpha: 0.3  # Jo-SNC prediction consistency loss 权重；TQC loss_mode 下不启用原 Jo-SNC 分支，仅保留兼容。
