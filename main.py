@@ -442,7 +442,9 @@ def main(gpu, cfg):
         tqc_epoch_writer = Writer(
             root_dir=result_dir,
             filename='tqc_epoch_metrics.csv',
-            header='epoch,loss_total,loss_anchor,loss_sb,anchor_acc,sibling_boundary_hard_acc,'
+            header='epoch,loss_total,loss_anchor,loss_sb,loss_sb_hard,loss_sb_soft,'
+                   'mu_loss_sb_soft,lambda_loss_sb_hard,lambda_mu_loss_sb_soft,'
+                   'anchor_acc,sibling_boundary_hard_acc,'
                    'sibling_boundary_soft_top1_match,anchor_used,sibling_used,ignored_skipped,'
                    'anchor_empty_batches,sibling_empty_batches,effective_samples,effective_ratio,lr,test_top1,test_top5,sibling_error_ratio'
         )
@@ -502,6 +504,11 @@ def main(gpu, cfg):
         tqc_loss_total_meter = AverageMeter()
         tqc_loss_anchor_meter = AverageMeter()
         tqc_loss_sb_meter = AverageMeter()
+        tqc_loss_sb_hard_meter = AverageMeter()
+        tqc_loss_sb_soft_meter = AverageMeter()
+        tqc_mu_loss_sb_soft_meter = AverageMeter()
+        tqc_lambda_loss_sb_hard_meter = AverageMeter()
+        tqc_lambda_mu_loss_sb_soft_meter = AverageMeter()
         tqc_anchor_acc_meter = AverageMeter()
         tqc_sb_hard_acc_meter = AverageMeter()
         tqc_sb_soft_match_meter = AverageMeter()
@@ -611,6 +618,12 @@ def main(gpu, cfg):
                                     loss_sb_hard = hard_ce_two_views(logits1[sb_mask], logits2[sb_mask], y[sb_mask])
                                     loss_sb_soft = soft_ce_two_views(logits1[sb_mask], logits2[sb_mask], sb_soft_labels)
                                     loss_sb = loss_sb_hard + mu * loss_sb_soft
+                                    lambda_sb = float(cfg.get('lambda_sb', 0.0))
+                                    tqc_loss_sb_hard_meter.update(loss_sb_hard.detach().item(), n_sb)
+                                    tqc_loss_sb_soft_meter.update(loss_sb_soft.detach().item(), n_sb)
+                                    tqc_mu_loss_sb_soft_meter.update((mu * loss_sb_soft).detach().item(), n_sb)
+                                    tqc_lambda_loss_sb_hard_meter.update((lambda_sb * loss_sb_hard).detach().item(), n_sb)
+                                    tqc_lambda_mu_loss_sb_soft_meter.update((lambda_sb * mu * loss_sb_soft).detach().item(), n_sb)
                                 else:
                                     loss_sb = soft_ce_two_views(logits1[sb_mask], logits2[sb_mask], sb_soft_labels)
                                 tqc_loss_sb_meter.update(loss_sb.detach().item(), n_sb)
@@ -865,6 +878,12 @@ def main(gpu, cfg):
             logger.msg(f'loss_anchor = {safe_meter_avg(tqc_loss_anchor_meter):.4f}')
             logger.msg(f'loss_sb = {safe_meter_avg(tqc_loss_sb_meter):.4f}')
             logger.msg(f'lambda_sb = {cfg.get("lambda_sb", 0.0)}')
+            if cfg.loss_mode == 'anchor_sibling_hard_soft_reg':
+                logger.msg(f'loss_sb_hard = {safe_meter_avg(tqc_loss_sb_hard_meter):.4f}')
+                logger.msg(f'loss_sb_soft = {safe_meter_avg(tqc_loss_sb_soft_meter):.4f}')
+                logger.msg(f'mu_loss_sb_soft = {safe_meter_avg(tqc_mu_loss_sb_soft_meter):.4f}')
+                logger.msg(f'lambda_loss_sb_hard = {safe_meter_avg(tqc_lambda_loss_sb_hard_meter):.4f}')
+                logger.msg(f'lambda_mu_loss_sb_soft = {safe_meter_avg(tqc_lambda_mu_loss_sb_soft_meter):.4f}')
             logger.msg(f'[Epoch {epoch + 1} Train Acc by Group]')
             logger.msg(f'anchor_acc = {safe_meter_avg(tqc_anchor_acc_meter):.2f}%')
             logger.msg(f'sibling_boundary_hard_acc = {safe_meter_avg(tqc_sb_hard_acc_meter):.2f}%')
@@ -928,6 +947,11 @@ def main(gpu, cfg):
                 f'{safe_meter_avg(tqc_loss_total_meter):.6f},'
                 f'{safe_meter_avg(tqc_loss_anchor_meter):.6f},'
                 f'{safe_meter_avg(tqc_loss_sb_meter):.6f},'
+                f'{safe_meter_avg(tqc_loss_sb_hard_meter):.6f},'
+                f'{safe_meter_avg(tqc_loss_sb_soft_meter):.6f},'
+                f'{safe_meter_avg(tqc_mu_loss_sb_soft_meter):.6f},'
+                f'{safe_meter_avg(tqc_lambda_loss_sb_hard_meter):.6f},'
+                f'{safe_meter_avg(tqc_lambda_mu_loss_sb_soft_meter):.6f},'
                 f'{safe_meter_avg(tqc_anchor_acc_meter):.4f},'
                 f'{safe_meter_avg(tqc_sb_hard_acc_meter):.4f},'
                 f'{safe_meter_avg(tqc_sb_soft_match_meter):.4f},'
@@ -948,6 +972,11 @@ def main(gpu, cfg):
                 'loss_total': safe_meter_avg(tqc_loss_total_meter),
                 'loss_anchor': safe_meter_avg(tqc_loss_anchor_meter),
                 'loss_sb': safe_meter_avg(tqc_loss_sb_meter),
+                'loss_sb_hard': safe_meter_avg(tqc_loss_sb_hard_meter),
+                'loss_sb_soft': safe_meter_avg(tqc_loss_sb_soft_meter),
+                'mu_loss_sb_soft': safe_meter_avg(tqc_mu_loss_sb_soft_meter),
+                'lambda_loss_sb_hard': safe_meter_avg(tqc_lambda_loss_sb_hard_meter),
+                'lambda_mu_loss_sb_soft': safe_meter_avg(tqc_lambda_mu_loss_sb_soft_meter),
                 'anchor_acc': safe_meter_avg(tqc_anchor_acc_meter),
                 'sibling_boundary_hard_acc': safe_meter_avg(tqc_sb_hard_acc_meter),
                 'sibling_boundary_soft_top1_match': safe_meter_avg(tqc_sb_soft_match_meter),
