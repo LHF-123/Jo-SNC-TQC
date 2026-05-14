@@ -1,127 +1,68 @@
-# Web-Bird TQC V1 - B2
+﻿# Web-Bird TQC V1 - B2
 # Anchor + sibling hard CE: train anchor and sibling-boundary samples with hard web labels.
 
-# 数据集根目录；main.py 会拼接为 data_root/dataset，例如 /root/autodl-tmp/web-bird。
-data_root: /root/autodl-tmp/
-# 数据集名称；决定读取 WebFG 数据和使用对应归一化参数。
-dataset: web-bird
-# 类别数；Web-Bird 为 200 类。
-n_classes: 200
-# 输入图像先 resize 到的尺寸。
-rescale_size: 448
-# 训练/测试裁剪尺寸。
-crop_size: 448
+data_root: /root/autodl-tmp/  # 数据集根目录；main.py 会拼接为 data_root/dataset，例如 /root/autodl-tmp/web-bird。
+dataset: web-bird  # 数据集名称；决定读取 WebFG 数据和使用对应归一化参数。
+n_classes: 200  # 类别数；Web-Bird 为 200 类。
+rescale_size: 448  # 输入图像先 resize 到的尺寸。
+crop_size: 448  # 训练/测试裁剪尺寸。
 
-# Backbone 架构；对齐 scripts/bird.sh 的实际 benchmark 设置。
-arch: resnet50
-# 优化器类型；当前使用 SGD。
-opt: sgd
-# 每张 GPU 的 batch size；当前按显存调整为 56。
-batch_size: 56
-# 总训练 epoch 数。
-epochs: 120
-# 主学习率。
-lr: 0.005
-# 学习率衰减策略；cosine:开始衰减epoch,结束学习率,结束epoch。
-lr_decay: cosine:10,1e-8,110
-# warmup epoch 数。
-warmup_epochs: 5
-# warmup 阶段学习率。
-warmup_lr: 0.005
-# warmup 学习率计划；constant 表示 warmup 内固定为 warmup_lr。
-warmup_lr_plan: constant
-# 权重衰减。
-weight_decay: 3.0e-4
-# 是否使用 mixed precision 训练。
-use_fp16: True
-# 是否显示训练和评估 tqdm 进度条。
-enable_progress_bar: True
-# 模型投影/特征维度；对齐 scripts/bird.sh 的 fdim=512。
-fdim: 512
-# MLP hidden 倍率；传给 DualHeadModel。
-hdim: 2
-# 数据增强强度；strong 使用 RandAugment 分支。
-transform: strong
+arch: resnet50  # Backbone 架构；对齐 scripts/bird.sh 的实际 benchmark 设置。
+opt: sgd  # 优化器类型；当前使用 SGD。
+batch_size: 72  # 每张 GPU 的 batch size；当前按显存调整为 72。
+epochs: 120  # 总训练 epoch 数。
+lr: 0.0075  # 主学习率。
+lr_decay: cosine:10,1e-8,110  # 学习率衰减策略；cosine:开始衰减epoch,结束学习率,结束epoch。
+warmup_epochs: 5  # warmup epoch 数。
+warmup_lr: 0.0075  # warmup 阶段学习率。
+warmup_lr_plan: constant  # warmup 学习率计划；constant 表示 warmup 内固定为 warmup_lr。
+weight_decay: 3.0e-4  # 权重衰减。
+use_fp16: True  # 是否使用 mixed precision 训练。
+enable_progress_bar: True  # 是否显示训练和评估 tqdm 进度条。
+fdim: 512  # 模型投影/特征维度；对齐 scripts/bird.sh 的 fdim=512。
+hdim: 2  # MLP hidden 倍率；传给 DualHeadModel。
+transform: strong  # 数据增强强度；strong 使用 RandAugment 分支。
 
-# V1 损失模式；anchor_sibling_hard 表示 anchor 和 sibling_boundary 都用 web label hard CE。
-loss_mode: anchor_sibling_hard
-# sibling hard CE 的损失权重。
-lambda_sb: 0.5
+loss_mode: anchor_sibling_hard  # V1 损失模式；anchor_sibling_hard 表示 anchor 和 sibling_boundary 都用 web label hard CE。
+lambda_sb: 0.5  # sibling hard CE 的损失权重。
 
-# TQC 分组文件；训练时读取 group id：0=ignore, 1=anchor, 2=sibling_boundary。
-tqc_group_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sample_group.json
-# 样本 margin 明细；训练不读取，启动时复制进实验目录用于诊断。
-tqc_margin_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sample_margins.csv
-# 每类 group 统计；训练不读取，启动时复制进实验目录用于诊断。
-tqc_class_stats_path: /root/Jo-SNC-TQC/results/tqc_web_bird/class_group_stats.csv
-# sibling 类别字典；评估阶段用于计算 sibling_error_ratio。
-tqc_sibling_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sibling_dict.json
-# TQC 诊断目录；启动时复制标准 TQC 输出文件到实验目录。
-tqc_stats_dir: /root/Jo-SNC-TQC/results/tqc_web_bird
+tqc_group_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sample_group.json  # TQC 分组文件；训练时读取 group id：0=ignore, 1=anchor, 2=sibling_boundary。
+tqc_margin_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sample_margins.csv  # 样本 margin 明细；训练不读取，启动时复制进实验目录用于诊断。
+tqc_class_stats_path: /root/Jo-SNC-TQC/results/tqc_web_bird/class_group_stats.csv  # 每类 group 统计；训练不读取，启动时复制进实验目录用于诊断。
+tqc_sibling_path: /root/Jo-SNC-TQC/results/tqc_web_bird/sibling_dict.json  # sibling 类别字典；评估阶段用于计算 sibling_error_ratio。
+tqc_stats_dir: /root/Jo-SNC-TQC/results/tqc_web_bird  # TQC 诊断目录；启动时复制标准 TQC 输出文件到实验目录。
 
-# 离线 CLIP 模型名称；用于记录分组配置。
-clip_model: ViT-B/32
-# sibling set 的 Top-K 类别数；需与 build_tqc_groups.py 参数一致。
-K_s: 5
-# local family 的 Top-K 类别数；需与 build_tqc_groups.py 参数一致。
-K_f: 10
-# family margin 里 top-average 的 r。
-tqc_r: 3
-# domain margin 底部百分比阈值；低于该阈值判为 out_domain。
-domain_bottom: 10
-# 每类 family margin 底部百分比阈值；低于该阈值判为 family_mismatch。
-family_bottom: 20
-# fine margin 高阈值分位点；70 表示 >= p70 的样本判为 anchor。
-fine_high: 70
-# fine margin 低阈值分位点；20 表示 < p20 的样本判为 fine_uncertain。
-fine_low: 20
-# 构造 sibling soft label 的 softmax 温度；B2 不使用，仅记录。
-temperature: 0.1
+clip_model: ViT-B/32  # 离线 CLIP 模型名称；用于记录分组配置。
+K_s: 5  # sibling set 的 Top-K 类别数；需与 build_tqc_groups.py 参数一致。
+K_f: 10  # local family 的 Top-K 类别数；需与 build_tqc_groups.py 参数一致。
+tqc_r: 3  # family margin 里 top-average 的 r。
+domain_bottom: 10  # domain margin 底部百分比阈值；低于该阈值判为 out_domain。
+family_bottom: 20  # 每类 family margin 底部百分比阈值；低于该阈值判为 family_mismatch。
+fine_high: 70  # fine margin 高阈值分位点；70 表示 >= p70 的样本判为 anchor。
+fine_low: 20  # fine margin 低阈值分位点；20 表示 < p20 的样本判为 fine_uncertain。
+temperature: 0.1  # 构造 sibling soft label 的 softmax 温度；B2 不使用，仅记录。
 
-# label smoothing 参数；hard CE 训练中用于构造平滑标签。
-eps: 0.1
-# Jo-SNC prediction consistency loss 权重；TQC loss_mode 下不启用原 Jo-SNC 分支，仅保留兼容。
-alpha: 0.3
-# Jo-SNC NCR loss 权重；TQC loss_mode 下不启用原 Jo-SNC 分支，仅保留兼容。
-beta: 0.8
-# Jo-SNC feature contrastive loss 权重；TQC loss_mode 下不启用原 Jo-SNC 分支，仅保留兼容。
-gamma: 0.001
-# Jo-SNC 近邻数量；TQC V1 不使用原 NCR，仅保留兼容。
-n_neighbors: 10
-# Jo-SNC partial label topK；TQC V1 不使用，仅保留兼容。
-topK: 10
-# Jo-SNC topK 衰减周期；TQC V1 不使用，仅保留兼容。
-topK_decay: 1000
-# Jo-SNC 阈值 EMA 动量；TQC V1 不使用，仅保留兼容。
-tau_m: 0.98
-# Jo-SNC 阈值增长因子；TQC V1 不使用，仅保留兼容。
-delta: 0.0
-# MoCo 队列长度；TQC V1 不使用原队列损失，但 main.py 初始化队列需要该值。
-queue_length: 32000
-# key network momentum；TQC V1 仍沿用 q/k model 更新结构。
-knet_m: 0.99
-# Jo-SNC OOD 样本训练方式；TQC V1 不使用，仅保留兼容。
-cls4ood: nl
-# Jo-SNC ID noisy 样本训练方式；TQC V1 不使用，仅保留兼容。
-cls4id: ce
-# Jo-SNC NCR loss 类型；TQC V1 不使用，仅保留兼容。
-ncr_lossfunc: kldiv
-# Jo-SNC clean 判定整合方式；TQC V1 不使用，仅保留兼容。
-integrate_mode: or
-# Jo-SNC OOD 判定准则；TQC V1 不使用，仅保留兼容。
-ood_criterion: div
-# Jo-SNC 阈值生成方式；TQC V1 不使用，仅保留兼容。
-threshold_generator: per_class_mean
-# 是否评估样本检测指标；TQC V1 关闭原 Jo-SNC detection eval。
-eval_det: 0
-# 是否使用 benchmark 风格日志目录。
-benchmark: True
-# Jo-SNC 置信度加权开关；TQC V1 不使用，仅保留兼容。
-conf_weight: True
+eps: 0.1  # label smoothing 参数；hard CE 训练中用于构造平滑标签。
+alpha: 0.3  # Jo-SNC prediction consistency loss 权重；TQC loss_mode 下不启用原 Jo-SNC 分支，仅保留兼容。
+beta: 0.8  # Jo-SNC NCR loss 权重；TQC loss_mode 下不启用原 Jo-SNC 分支，仅保留兼容。
+gamma: 0.001  # Jo-SNC feature contrastive loss 权重；TQC loss_mode 下不启用原 Jo-SNC 分支，仅保留兼容。
+n_neighbors: 10  # Jo-SNC 近邻数量；TQC V1 不使用原 NCR，仅保留兼容。
+topK: 10  # Jo-SNC partial label topK；TQC V1 不使用，仅保留兼容。
+topK_decay: 1000  # Jo-SNC topK 衰减周期；TQC V1 不使用，仅保留兼容。
+tau_m: 0.98  # Jo-SNC 阈值 EMA 动量；TQC V1 不使用，仅保留兼容。
+delta: 0.0  # Jo-SNC 阈值增长因子；TQC V1 不使用，仅保留兼容。
+queue_length: 32000  # MoCo 队列长度；TQC V1 不使用原队列损失，但 main.py 初始化队列需要该值。
+knet_m: 0.99  # key network momentum；TQC V1 仍沿用 q/k model 更新结构。
+cls4ood: nl  # Jo-SNC OOD 样本训练方式；TQC V1 不使用，仅保留兼容。
+cls4id: ce  # Jo-SNC ID noisy 样本训练方式；TQC V1 不使用，仅保留兼容。
+ncr_lossfunc: kldiv  # Jo-SNC NCR loss 类型；TQC V1 不使用，仅保留兼容。
+integrate_mode: or  # Jo-SNC clean 判定整合方式；TQC V1 不使用，仅保留兼容。
+ood_criterion: div  # Jo-SNC OOD 判定准则；TQC V1 不使用，仅保留兼容。
+threshold_generator: per_class_mean  # Jo-SNC 阈值生成方式；TQC V1 不使用，仅保留兼容。
+eval_det: 0  # 是否评估样本检测指标；TQC V1 关闭原 Jo-SNC detection eval。
+benchmark: True  # 是否使用 benchmark 风格日志目录。
+conf_weight: True  # Jo-SNC 置信度加权开关；TQC V1 不使用，仅保留兼容。
 
-# 结果根目录。
-log_root: ../results/
-# 日志项目名；用于组织实验目录。
-log_proj: TQC-V1
-# 实验名称；用于组织实验目录。
-log_name: B2_anchor_sibling_hard
+log_root: /root/Jo-SNC-TQC/results/  # 结果根目录。
+log_proj: TQC-V1  # 日志项目名；用于组织实验目录。
+log_name: B2_anchor_sibling_hard  # 实验名称；用于组织实验目录。
