@@ -113,6 +113,48 @@ tqc_sibling_path: sibling_dict.json
 
 训练使用 `anchor` 的 hard CE，以及 `sibling_boundary` 的 CLIP soft label CE。
 
+## 7. 跑 B3.1：Anchor + sibling mixed CE
+
+```powershell
+python main.py --cfg config/bird_tqc_b31.yaml --gpu 0
+```
+
+B3.1 读取：
+
+```text
+tqc_group_path: sample_group.json
+tqc_soft_label_path: soft_labels.npy
+tqc_sibling_path: sibling_dict.json
+```
+
+训练使用 `anchor` 的 hard CE，以及 `sibling_boundary` 的 mixed target CE：
+
+```text
+q_mix = (1 - soft_label_mix_alpha) * q_clip + soft_label_mix_alpha * onehot(web_label)
+soft_label_mix_alpha = 0.5
+```
+
+## 8. 跑 B3.2：Anchor + sibling hard CE + soft regularization
+
+```powershell
+python main.py --cfg config/bird_tqc_b32.yaml --gpu 0
+```
+
+B3.2 读取：
+
+```text
+tqc_group_path: sample_group.json
+tqc_soft_label_path: soft_labels.npy
+tqc_sibling_path: sibling_dict.json
+```
+
+训练使用 `anchor` 的 hard CE；`sibling_boundary` 使用 web label hard CE 作为主监督，并加入较弱的 CLIP soft CE：
+
+```text
+loss_sb = loss_hard + soft_regularization_mu * loss_soft
+soft_regularization_mu = 0.1
+```
+
 ## 训练时离线文件的使用方式
 
 ```text
@@ -124,7 +166,7 @@ sample_group.json
 soft_labels.npy
   -> data/image_folder.py
   -> batch["soft_label"]
-  -> 只在 B3 的 sibling soft CE 中使用
+  -> 在 B3 的 sibling soft CE、B3.1 的 sibling mixed CE 和 B3.2 的 soft regularization 中使用
 
 sibling_dict.json
   -> main.py 评估阶段
@@ -156,5 +198,5 @@ best_checkpoint.pth
 1. 先看 sample_group.json / class_group_stats.csv，确认 anchor 覆盖是否健康。
 2. 再看 soft label 统计，确认 avg_max_prob / entropy / web_label_prob 是否合理。
 3. 再看 tqc_epoch_metrics.csv，确认 loss_anchor / loss_sb 是否正常下降。
-4. 最后比较 B0 / B1 / B2 / B3 的 test top1/top5。
+4. 最后比较 B0 / B1 / B2 / B3 / B3.1 / B3.2 的 test top1/top5。
 ```

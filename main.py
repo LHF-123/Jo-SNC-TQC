@@ -224,7 +224,15 @@ def generate_label_sets(batch_label_sets, nc):
     return label_sets
 
 
-TQC_LOSS_MODES = {'ce_baseline', 'anchor_only', 'anchor_sibling_hard', 'anchor_sibling_soft'}
+TQC_LOSS_MODES = {
+    'ce_baseline',
+    'anchor_only',
+    'anchor_sibling_hard',
+    'anchor_sibling_soft',
+    'anchor_sibling_mixed',
+    'anchor_sibling_hard_soft_reg',
+}
+TQC_SOFT_LABEL_MODES = {'anchor_sibling_soft', 'anchor_sibling_mixed', 'anchor_sibling_hard_soft_reg'}
 TQC_GROUP_IGNORE = 0
 TQC_GROUP_ANCHOR = 1
 TQC_GROUP_SIBLING = 2
@@ -238,7 +246,7 @@ def require_tqc_batch_fields(sample, cfg):
     if cfg.loss_mode == 'ce_baseline':
         return
     missing = [key for key in ['group'] if key not in sample]
-    if cfg.loss_mode == 'anchor_sibling_soft' and 'soft_label' not in sample:
+    if cfg.loss_mode in TQC_SOFT_LABEL_MODES and 'soft_label' not in sample:
         missing.append('soft_label')
     if len(missing) > 0:
         raise AssertionError(f'TQC loss mode {cfg.loss_mode} requires batch field(s): {missing}')
@@ -252,6 +260,21 @@ def hard_ce_two_views(logits1, logits2, labels):
 def soft_ce_two_views(logits1, logits2, soft_labels):
     return 0.5 * soft_cross_entropy_loss(logits1, soft_labels, reduction='mean') + \
            0.5 * soft_cross_entropy_loss(logits2, soft_labels, reduction='mean')
+
+
+def mix_soft_targets_with_web_label(soft_labels, labels, num_classes, alpha):
+    if alpha < 0.0 or alpha > 1.0:
+        raise AssertionError(f'soft_label_mix_alpha must be in [0, 1], got {alpha}')
+    targets = (1.0 - alpha) * soft_labels.clone()
+    hard = F.one_hot(labels, num_classes=num_classes).to(targets.dtype)
+    return targets + alpha * hard
+
+
+def get_soft_regularization_mu(cfg):
+    mu = float(cfg.get('soft_regularization_mu', 0.1))
+    if mu < 0.0:
+        raise AssertionError(f'soft_regularization_mu must be >= 0, got {mu}')
+    return mu
 
 
 def safe_meter_avg(meter):
@@ -289,6 +312,7 @@ def log_experiment_config(logger, cfg):
     logger.msg('[Experiment]')
     keys = [
         'log_name', 'dataset', 'arch', 'clip_model', 'loss_mode', 'lambda_sb',
+        'soft_label_mix_alpha', 'soft_regularization_mu',
         'K_s', 'K_f', 'tqc_r', 'domain_bottom', 'family_bottom', 'fine_high',
         'fine_low', 'temperature', 'seed'
     ]
@@ -372,7 +396,7 @@ def main(gpu, cfg):
     dataset = build_dataset(cfg)
     if tqc_mode and cfg.loss_mode != 'ce_baseline':
         assert cfg.get('tqc_group_path', None) is not None, f'{cfg.loss_mode} requires tqc_group_path'
-    if tqc_mode and cfg.loss_mode == 'anchor_sibling_soft':
+    if tqc_mode and cfg.loss_mode in TQC_SOFT_LABEL_MODES:
         assert cfg.get('tqc_soft_label_path', None) is not None, f'{cfg.loss_mode} requires tqc_soft_label_path'
     train_loader = DataLoader(dataset['train'], batch_size=cfg.batch_size, shuffle=True, num_workers=8, pin_memory=True)
     test_loader = DataLoader(dataset['test'], batch_size=cfg.batch_size, shuffle=False, num_workers=8, pin_memory=True)
@@ -538,7 +562,12 @@ def main(gpu, cfg):
                         n_anchor = int(anchor_mask.sum().item())
                         n_sb = int(sb_mask.sum().item())
                         n_ignore = int(ignore_mask.sum().item())
-                        use_sibling_loss = cfg.loss_mode in ['anchor_sibling_hard', 'anchor_sibling_soft']
+                        use_sibling_loss = cfg.loss_mode in [
+                            'anchor_sibling_hard',
+                            'anchor_sibling_soft',
+                            'anchor_sibling_mixed',
+                            'anchor_sibling_hard_soft_reg',
+                        ]
                         tqc_stats['anchor_used'] += n_anchor
                         if use_sibling_loss:
                             tqc_stats['sibling_used'] += n_sb
@@ -563,12 +592,27 @@ def main(gpu, cfg):
                                 tqc_loss_sb_meter.update(loss_sb.detach().item(), n_sb)
                                 tqc_sb_hard_acc_meter.update(accuracy(logits1[sb_mask], y[sb_mask], topk=(1,))[0], n_sb)
                             loss = loss_anchor + cfg.lambda_sb * loss_sb
-                        elif cfg.loss_mode == 'anchor_sibling_soft':
+                        elif cfg.loss_mode in TQC_SOFT_LABEL_MODES:
                             effective_bs = n_anchor + n_sb
                             soft_labels_batch = sample['soft_label'].to(device).float()
                             if n_sb > 0:
                                 sb_soft_labels = soft_labels_batch[sb_mask]
-                                loss_sb = soft_ce_two_views(logits1[sb_mask], logits2[sb_mask], sb_soft_labels)
+                                if cfg.loss_mode == 'anchor_sibling_mixed':
+                                    mix_alpha = float(cfg.get('soft_label_mix_alpha', 0.5))
+                                    sb_soft_labels = mix_soft_targets_with_web_label(
+                                        sb_soft_labels,
+                                        y[sb_mask],
+                                        cfg.n_classes,
+                                        mix_alpha,
+                                    )
+                                    loss_sb = soft_ce_two_views(logits1[sb_mask], logits2[sb_mask], sb_soft_labels)
+                                elif cfg.loss_mode == 'anchor_sibling_hard_soft_reg':
+                                    mu = get_soft_regularization_mu(cfg)
+                                    loss_sb_hard = hard_ce_two_views(logits1[sb_mask], logits2[sb_mask], y[sb_mask])
+                                    loss_sb_soft = soft_ce_two_views(logits1[sb_mask], logits2[sb_mask], sb_soft_labels)
+                                    loss_sb = loss_sb_hard + mu * loss_sb_soft
+                                else:
+                                    loss_sb = soft_ce_two_views(logits1[sb_mask], logits2[sb_mask], sb_soft_labels)
                                 tqc_loss_sb_meter.update(loss_sb.detach().item(), n_sb)
                                 tqc_sb_hard_acc_meter.update(accuracy(logits1[sb_mask], y[sb_mask], topk=(1,))[0], n_sb)
                                 soft_top1 = sb_soft_labels.argmax(dim=1)
@@ -934,7 +978,8 @@ def check_args(args):
         'integrate_mode', 'ood_criterion', 'conf_weight', 'threshold_generator',
         'cls4id', 'cls4ood', 'ncr_lossfunc', 'predefined_tau_clean',
         'eval_det', 'use_fp16', 'benchmark', 'ablation', 'save_model', 'save_ckpt',
-        'loss_mode', 'lambda_sb', 'tqc_group_path', 'tqc_soft_label_path', 'tqc_margin_path',
+        'loss_mode', 'lambda_sb', 'soft_label_mix_alpha', 'soft_regularization_mu',
+        'tqc_group_path', 'tqc_soft_label_path', 'tqc_margin_path',
         'tqc_class_stats_path', 'tqc_sibling_path', 'tqc_stats_dir', 'clip_model',
         'K_s', 'K_f', 'tqc_r', 'domain_bottom', 'family_bottom', 'fine_high',
         'fine_low', 'temperature'
@@ -983,8 +1028,18 @@ def parse_args():
     parser.add_argument('--use-fp16', type=bool, default=None)
     parser.add_argument('--transform', type=str, default='strong')
     parser.add_argument('--loss-mode', type=str, default=None,
-                        choices=['josnc', 'ce_baseline', 'anchor_only', 'anchor_sibling_hard', 'anchor_sibling_soft'])
+                        choices=[
+                            'josnc',
+                            'ce_baseline',
+                            'anchor_only',
+                            'anchor_sibling_hard',
+                            'anchor_sibling_soft',
+                            'anchor_sibling_mixed',
+                            'anchor_sibling_hard_soft_reg',
+                        ])
     parser.add_argument('--lambda-sb', type=float, default=None)
+    parser.add_argument('--soft-label-mix-alpha', type=float, default=None)
+    parser.add_argument('--soft-regularization-mu', type=float, default=None)
     parser.add_argument('--tqc-group-path', type=str, default=None)
     parser.add_argument('--tqc-soft-label-path', type=str, default=None)
     parser.add_argument('--tqc-margin-path', type=str, default=None)
