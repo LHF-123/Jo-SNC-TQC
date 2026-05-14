@@ -224,7 +224,7 @@ def generate_label_sets(batch_label_sets, nc):
     return label_sets
 
 
-TQC_LOSS_MODES = {
+TQC_REPLACEMENT_LOSS_MODES = {
     'ce_baseline',
     'anchor_only',
     'anchor_sibling_hard',
@@ -232,14 +232,44 @@ TQC_LOSS_MODES = {
     'anchor_sibling_mixed',
     'anchor_sibling_hard_soft_reg',
 }
+TQC_AUX_LOSS_MODES = {
+    'josnc_tqc_hard_aux',
+}
+TQC_LOSS_MODES = TQC_REPLACEMENT_LOSS_MODES | TQC_AUX_LOSS_MODES
 TQC_SOFT_LABEL_MODES = {'anchor_sibling_soft', 'anchor_sibling_mixed', 'anchor_sibling_hard_soft_reg'}
 TQC_GROUP_IGNORE = 0
 TQC_GROUP_ANCHOR = 1
 TQC_GROUP_SIBLING = 2
 
 
+def is_tqc_replacement_loss_mode(cfg):
+    return cfg.get('loss_mode', 'josnc') in TQC_REPLACEMENT_LOSS_MODES
+
+
+def is_tqc_aux_loss_mode(cfg):
+    return cfg.get('loss_mode', 'josnc') in TQC_AUX_LOSS_MODES
+
+
 def is_tqc_loss_mode(cfg):
     return cfg.get('loss_mode', 'josnc') in TQC_LOSS_MODES
+
+
+def config_bool(cfg, key, default):
+    value = cfg.get(key, default)
+    if isinstance(value, str):
+        return value.lower() in ['1', 'true', 'yes', 'y']
+    return bool(value)
+
+
+def parse_bool_arg(value):
+    if isinstance(value, bool):
+        return value
+    value = value.lower()
+    if value in ['1', 'true', 'yes', 'y']:
+        return True
+    if value in ['0', 'false', 'no', 'n']:
+        return False
+    raise argparse.ArgumentTypeError(f'Expected boolean value, got {value}')
 
 
 def require_tqc_batch_fields(sample, cfg):
@@ -295,6 +325,18 @@ def get_dataset_class_names(dataset):
     return [str(i) for i in range(len(getattr(dataset, 'classes', [])))]
 
 
+def log_tqc_group_summary(logger, dataset):
+    summary = getattr(dataset, 'tqc_group_summary', None)
+    if summary is None:
+        return
+    logger.msg('[TQC Group File]')
+    logger.msg(f'num_groups = {summary["num_groups"]}')
+    logger.msg(f'num_dataset_samples = {summary["num_dataset_samples"]}')
+    logger.msg(f'anchor_count = {summary["anchor_count"]}')
+    logger.msg(f'sibling_count = {summary["sibling_count"]}')
+    logger.msg(f'ignored_count = {summary["ignored_count"]}')
+
+
 def copy_tqc_artifacts(result_dir, cfg):
     stats_dir = cfg.get('tqc_stats_dir', None)
     if stats_dir is not None and os.path.isdir(stats_dir):
@@ -311,8 +353,8 @@ def copy_tqc_artifacts(result_dir, cfg):
 def log_experiment_config(logger, cfg):
     logger.msg('[Experiment]')
     keys = [
-        'log_name', 'dataset', 'arch', 'clip_model', 'loss_mode', 'lambda_sb',
-        'soft_label_mix_alpha', 'soft_regularization_mu',
+        'log_name', 'dataset', 'arch', 'clip_model', 'loss_mode', 'lambda_tqc', 'lambda_sb',
+        'tqc_aux_use_anchor', 'tqc_aux_use_sibling', 'soft_label_mix_alpha', 'soft_regularization_mu',
         'K_s', 'K_f', 'tqc_r', 'domain_bottom', 'family_bottom', 'fine_high',
         'fine_low', 'temperature', 'seed'
     ]
@@ -378,8 +420,16 @@ def main(gpu, cfg):
     set_seed(cfg.seed)
     device = torch.device(f'cuda:{gpu}')
     tqc_mode = is_tqc_loss_mode(cfg)
+    tqc_replacement_mode = is_tqc_replacement_loss_mode(cfg)
+    tqc_aux_mode = is_tqc_aux_loss_mode(cfg)
     if tqc_mode and 'lambda_sb' not in cfg:
         cfg.lambda_sb = 0.5
+    if tqc_aux_mode and 'lambda_tqc' not in cfg:
+        cfg.lambda_tqc = 0.1
+    if tqc_aux_mode and 'tqc_aux_use_anchor' not in cfg:
+        cfg.tqc_aux_use_anchor = True
+    if tqc_aux_mode and 'tqc_aux_use_sibling' not in cfg:
+        cfg.tqc_aux_use_sibling = True
 
     # model
     q_model = DualHeadModel(arch=cfg.arch, num_classes=cfg.n_classes, mlp_hidden=cfg.hdim, feature_dim=cfg.fdim, pretrained=True, use_bn=True).to(device)
@@ -423,6 +473,7 @@ def main(gpu, cfg):
     logger.msg(f"# of training data: {n_train_samples}, # of test data: {dataset['n_test_samples']}")
     if tqc_mode:
         log_experiment_config(logger, cfg)
+        log_tqc_group_summary(logger, dataset['train'])
         copy_tqc_artifacts(result_dir, cfg)
 
     threshold_writer = Writer(root_dir=result_dir, filename='threshold.csv', header='epoch,threshold_clean,threshold_ood')
@@ -439,15 +490,25 @@ def main(gpu, cfg):
     tqc_sibling_dict = load_sibling_dict(cfg.get('tqc_sibling_path', None)) if tqc_mode else None
     tqc_class_names = get_dataset_class_names(dataset['train']) if tqc_mode else None
     if tqc_mode:
-        tqc_epoch_writer = Writer(
-            root_dir=result_dir,
-            filename='tqc_epoch_metrics.csv',
-            header='epoch,loss_total,loss_anchor,loss_sb,loss_sb_hard,loss_sb_soft,'
-                   'mu_loss_sb_soft,lambda_loss_sb_hard,lambda_mu_loss_sb_soft,'
-                   'anchor_acc,sibling_boundary_hard_acc,'
-                   'sibling_boundary_soft_top1_match,anchor_used,sibling_used,ignored_skipped,'
-                   'anchor_empty_batches,sibling_empty_batches,effective_samples,effective_ratio,lr,test_top1,test_top5,sibling_error_ratio'
-        )
+        if tqc_aux_mode:
+            tqc_epoch_writer = Writer(
+                root_dir=result_dir,
+                filename='tqc_aux_epoch_metrics.csv',
+                header='epoch,loss_total,loss_josnc,loss_tqc_raw,loss_anchor_raw,loss_sb_hard_raw,'
+                       'weighted_tqc,weighted_anchor,weighted_sb_hard,'
+                       'anchor_acc,sibling_boundary_hard_acc,anchor_used,sibling_used,tqc_ignored_samples,'
+                       'anchor_empty_batches,sibling_empty_batches,lr,test_top1,test_top5,sibling_error_ratio'
+            )
+        else:
+            tqc_epoch_writer = Writer(
+                root_dir=result_dir,
+                filename='tqc_epoch_metrics.csv',
+                header='epoch,loss_total,loss_anchor,loss_sb,loss_sb_hard,loss_sb_soft,'
+                       'mu_loss_sb_soft,lambda_loss_sb_hard,lambda_mu_loss_sb_soft,'
+                       'anchor_acc,sibling_boundary_hard_acc,'
+                       'sibling_boundary_soft_top1_match,anchor_used,sibling_used,ignored_skipped,'
+                       'anchor_empty_batches,sibling_empty_batches,effective_samples,effective_ratio,lr,test_top1,test_top5,sibling_error_ratio'
+            )
 
     # meters
     train_loss_meter = AverageMeter()
@@ -509,6 +570,11 @@ def main(gpu, cfg):
         tqc_mu_loss_sb_soft_meter = AverageMeter()
         tqc_lambda_loss_sb_hard_meter = AverageMeter()
         tqc_lambda_mu_loss_sb_soft_meter = AverageMeter()
+        tqc_aux_loss_josnc_meter = AverageMeter()
+        tqc_aux_loss_tqc_raw_meter = AverageMeter()
+        tqc_aux_weighted_tqc_meter = AverageMeter()
+        tqc_aux_weighted_anchor_meter = AverageMeter()
+        tqc_aux_weighted_sb_hard_meter = AverageMeter()
         tqc_anchor_acc_meter = AverageMeter()
         tqc_sb_hard_acc_meter = AverageMeter()
         tqc_sb_soft_match_meter = AverageMeter()
@@ -549,7 +615,7 @@ def main(gpu, cfg):
                     # ema_logits2, ema_feat2 = k_model(x2)
                     k = ema_feat1
 
-                if tqc_mode:
+                if tqc_replacement_mode:
                     require_tqc_batch_fields(sample, cfg)
                     zero_loss = logits1.sum() * 0.0 + logits2.sum() * 0.0
                     loss_anchor = zero_loss
@@ -656,6 +722,9 @@ def main(gpu, cfg):
                         label_recorder.extend(y.clone().detach().cpu().numpy().tolist())
 
                     loss = F.cross_entropy(logits1, ob_labels, reduction='mean')
+                    if tqc_aux_mode:
+                        tqc_loss_total_meter.update(loss.detach().item(), bs)
+                        tqc_aux_loss_josnc_meter.update(loss.detach().item(), bs)
                 # >>>>>>>> JoSNC Stage <<<<<<<<
                 else:
                     batch_tau_c = tau_c[y]  # (bs, )
@@ -738,6 +807,56 @@ def main(gpu, cfg):
 
                     # final loss
                     loss = loss_cls + cfg.alpha * loss_con_pred + cfg.gamma * loss_con_feat + cfg.beta * loss_ncr
+                    if tqc_aux_mode:
+                        require_tqc_batch_fields(sample, cfg)
+                        loss_josnc = loss
+                        zero_loss = logits1.sum() * 0.0 + logits2.sum() * 0.0
+                        loss_anchor_raw = zero_loss
+                        loss_sb_hard_raw = zero_loss
+                        groups = sample['group'].to(device).long()
+                        anchor_mask = groups == TQC_GROUP_ANCHOR
+                        sb_mask = groups == TQC_GROUP_SIBLING
+                        ignore_mask = groups == TQC_GROUP_IGNORE
+                        n_anchor = int(anchor_mask.sum().item())
+                        n_sb = int(sb_mask.sum().item())
+                        n_ignore = int(ignore_mask.sum().item())
+                        use_anchor_aux = config_bool(cfg, 'tqc_aux_use_anchor', True)
+                        use_sibling_aux = config_bool(cfg, 'tqc_aux_use_sibling', True)
+                        lambda_tqc = float(cfg.get('lambda_tqc', 0.1))
+                        lambda_sb = float(cfg.get('lambda_sb', 0.5))
+
+                        tqc_stats['anchor_used'] += n_anchor if use_anchor_aux else 0
+                        tqc_stats['sibling_used'] += n_sb if use_sibling_aux else 0
+                        tqc_stats['ignored_skipped'] += n_ignore
+                        tqc_stats['ignored_skipped'] += 0 if use_anchor_aux else n_anchor
+                        tqc_stats['ignored_skipped'] += 0 if use_sibling_aux else n_sb
+                        tqc_stats['anchor_empty_batches'] += int(n_anchor == 0)
+                        tqc_stats['sibling_empty_batches'] += int(n_sb == 0)
+                        tqc_stats['effective_samples'] += bs
+
+                        if use_anchor_aux and n_anchor > 0:
+                            loss_anchor_raw = hard_ce_two_views(logits1[anchor_mask], logits2[anchor_mask], y[anchor_mask])
+                            tqc_loss_anchor_meter.update(loss_anchor_raw.detach().item(), n_anchor)
+                            tqc_anchor_acc_meter.update(accuracy(logits1[anchor_mask], y[anchor_mask], topk=(1,))[0], n_anchor)
+                        if use_sibling_aux and n_sb > 0:
+                            loss_sb_hard_raw = hard_ce_two_views(logits1[sb_mask], logits2[sb_mask], y[sb_mask])
+                            tqc_loss_sb_hard_meter.update(loss_sb_hard_raw.detach().item(), n_sb)
+                            tqc_sb_hard_acc_meter.update(accuracy(logits1[sb_mask], y[sb_mask], topk=(1,))[0], n_sb)
+
+                        anchor_term = loss_anchor_raw if use_anchor_aux else zero_loss
+                        sb_term = loss_sb_hard_raw if use_sibling_aux else zero_loss
+                        loss_tqc_raw = anchor_term + lambda_sb * sb_term
+                        weighted_anchor = lambda_tqc * anchor_term
+                        weighted_sb_hard = lambda_tqc * lambda_sb * sb_term
+                        weighted_tqc = lambda_tqc * loss_tqc_raw
+                        loss = loss_josnc + weighted_tqc
+
+                        tqc_loss_total_meter.update(loss.detach().item(), bs)
+                        tqc_aux_loss_josnc_meter.update(loss_josnc.detach().item(), bs)
+                        tqc_aux_loss_tqc_raw_meter.update(loss_tqc_raw.detach().item(), bs)
+                        tqc_aux_weighted_tqc_meter.update(weighted_tqc.detach().item(), bs)
+                        tqc_aux_weighted_anchor_meter.update(weighted_anchor.detach().item(), bs)
+                        tqc_aux_weighted_sb_hard_meter.update(weighted_sb_hard.detach().item(), bs)
 
                     l1 = losses_cls_clean.mean().clone().detach().item() if idx_clean.size(0) > 0 else 0.000
                     l2 = losses_cls_id.mean().clone().detach().item() if idx_id.size(0) > 0 else 0.000
@@ -770,7 +889,7 @@ def main(gpu, cfg):
 
             train_acc = accuracy(logits1, y, topk=(1,))
             train_accuracy_meter.update(train_acc[0], bs)
-            if tqc_mode:
+            if tqc_replacement_mode:
                 train_loss_meter.update(loss.item(), max(int(effective_bs), 1))
             else:
                 train_loss_meter.update(loss.item(), bs)
@@ -783,7 +902,7 @@ def main(gpu, cfg):
                                   f"{epoch_train_time.avg:4.0f} sec/iter"
                 logger.debug(console_content)
 
-        if not tqc_mode:
+        if not tqc_replacement_mode:
             if cfg.threshold_generator == 'gmm':
                 tau_c_tmp = gmm_based_threshold_generation(p_clean_metric, cfg.n_classes).to(device)
                 tau_o_tmp = gmm_based_threshold_generation(p_ood_metric, cfg.n_classes).to(device)
@@ -866,34 +985,51 @@ def main(gpu, cfg):
 
         epoch_runtime = time.time() - epoch_start
         if tqc_mode:
-            effective_ratio = tqc_stats['effective_samples'] * 100.0 / max(n_train_samples, 1)
             logger.msg(f'[Epoch {epoch + 1} Group Usage]')
             logger.msg(f"anchor samples used: {tqc_stats['anchor_used']}")
             logger.msg(f"sibling_boundary samples used: {tqc_stats['sibling_used']}")
-            logger.msg(f"ignored samples skipped: {tqc_stats['ignored_skipped']}")
+            if tqc_aux_mode:
+                logger.msg(f"tqc ignored samples: {tqc_stats['ignored_skipped']}")
+            else:
+                logger.msg(f"ignored samples skipped: {tqc_stats['ignored_skipped']}")
             logger.msg(f"anchor batches empty: {tqc_stats['anchor_empty_batches']}")
             logger.msg(f"sibling batches empty: {tqc_stats['sibling_empty_batches']}")
             logger.msg(f'[Epoch {epoch + 1} Loss]')
-            logger.msg(f'loss_total = {safe_meter_avg(tqc_loss_total_meter):.4f}')
-            logger.msg(f'loss_anchor = {safe_meter_avg(tqc_loss_anchor_meter):.4f}')
-            logger.msg(f'loss_sb = {safe_meter_avg(tqc_loss_sb_meter):.4f}')
-            logger.msg(f'lambda_sb = {cfg.get("lambda_sb", 0.0)}')
-            if cfg.loss_mode == 'anchor_sibling_hard_soft_reg':
-                logger.msg(f'loss_sb_hard = {safe_meter_avg(tqc_loss_sb_hard_meter):.4f}')
-                logger.msg(f'loss_sb_soft = {safe_meter_avg(tqc_loss_sb_soft_meter):.4f}')
-                logger.msg(f'mu_loss_sb_soft = {safe_meter_avg(tqc_mu_loss_sb_soft_meter):.4f}')
-                logger.msg(f'lambda_loss_sb_hard = {safe_meter_avg(tqc_lambda_loss_sb_hard_meter):.4f}')
-                logger.msg(f'lambda_mu_loss_sb_soft = {safe_meter_avg(tqc_lambda_mu_loss_sb_soft_meter):.4f}')
+            if tqc_aux_mode:
+                logger.msg(f'loss_total = {safe_meter_avg(tqc_loss_total_meter):.4f}')
+                logger.msg(f'loss_josnc = {safe_meter_avg(tqc_aux_loss_josnc_meter):.4f}')
+                logger.msg(f'loss_tqc_raw = {safe_meter_avg(tqc_aux_loss_tqc_raw_meter):.4f}')
+                logger.msg(f'loss_anchor_raw = {safe_meter_avg(tqc_loss_anchor_meter):.4f}')
+                logger.msg(f'loss_sb_hard_raw = {safe_meter_avg(tqc_loss_sb_hard_meter):.4f}')
+                logger.msg(f'weighted_tqc = {safe_meter_avg(tqc_aux_weighted_tqc_meter):.4f}')
+                logger.msg(f'weighted_anchor = {safe_meter_avg(tqc_aux_weighted_anchor_meter):.4f}')
+                logger.msg(f'weighted_sb_hard = {safe_meter_avg(tqc_aux_weighted_sb_hard_meter):.4f}')
+                logger.msg(f'lambda_tqc = {cfg.get("lambda_tqc", 0.0)}')
+                logger.msg(f'lambda_sb = {cfg.get("lambda_sb", 0.0)}')
+            else:
+                effective_ratio = tqc_stats['effective_samples'] * 100.0 / max(n_train_samples, 1)
+                logger.msg(f'loss_total = {safe_meter_avg(tqc_loss_total_meter):.4f}')
+                logger.msg(f'loss_anchor = {safe_meter_avg(tqc_loss_anchor_meter):.4f}')
+                logger.msg(f'loss_sb = {safe_meter_avg(tqc_loss_sb_meter):.4f}')
+                logger.msg(f'lambda_sb = {cfg.get("lambda_sb", 0.0)}')
+                if cfg.loss_mode == 'anchor_sibling_hard_soft_reg':
+                    logger.msg(f'loss_sb_hard = {safe_meter_avg(tqc_loss_sb_hard_meter):.4f}')
+                    logger.msg(f'loss_sb_soft = {safe_meter_avg(tqc_loss_sb_soft_meter):.4f}')
+                    logger.msg(f'mu_loss_sb_soft = {safe_meter_avg(tqc_mu_loss_sb_soft_meter):.4f}')
+                    logger.msg(f'lambda_loss_sb_hard = {safe_meter_avg(tqc_lambda_loss_sb_hard_meter):.4f}')
+                    logger.msg(f'lambda_mu_loss_sb_soft = {safe_meter_avg(tqc_lambda_mu_loss_sb_soft_meter):.4f}')
             logger.msg(f'[Epoch {epoch + 1} Train Acc by Group]')
             logger.msg(f'anchor_acc = {safe_meter_avg(tqc_anchor_acc_meter):.2f}%')
             logger.msg(f'sibling_boundary_hard_acc = {safe_meter_avg(tqc_sb_hard_acc_meter):.2f}%')
-            logger.msg(f'sibling_boundary_soft_top1_match = {safe_meter_avg(tqc_sb_soft_match_meter):.2f}%')
+            if not tqc_aux_mode:
+                logger.msg(f'sibling_boundary_soft_top1_match = {safe_meter_avg(tqc_sb_soft_match_meter):.2f}%')
             logger.msg(f'[Epoch {epoch + 1} Optim]')
             logger.msg(f'lr = {curr_lr:.6e}')
-            logger.msg(f"effective_samples = {tqc_stats['effective_samples']}")
-            logger.msg(f'effective_ratio = {effective_ratio:.2f}%')
-            if effective_ratio < 50.0:
-                logger.msg(f'[Warning] effective training samples < 50%. Current effective ratio = {effective_ratio:.2f}%.')
+            if tqc_replacement_mode:
+                logger.msg(f"effective_samples = {tqc_stats['effective_samples']}")
+                logger.msg(f'effective_ratio = {effective_ratio:.2f}%')
+                if effective_ratio < 50.0:
+                    logger.msg(f'[Warning] effective training samples < 50%. Current effective ratio = {effective_ratio:.2f}%.')
 
         best_epoch_display = best_epoch if best_epoch is not None else 0
         logger.info(f'epoch: {epoch + 1:>3d} | '
@@ -904,7 +1040,8 @@ def main(gpu, cfg):
                     f'bestAcc: {best_accuracy:6.3f} @ epoch: {best_epoch_display:03d}')
         plot_results(result_file=f'{result_dir}/log.txt')
 
-        if (not tqc_mode) and cfg.eval_det == 1 and epoch >= cfg.warmup_epochs:
+        has_det_ground_truth = gt_indicator_clean is not None and gt_indicator_id is not None and gt_indicator_ood is not None
+        if (not tqc_replacement_mode) and cfg.eval_det == 1 and epoch >= cfg.warmup_epochs and has_det_ground_truth:
             pr_indicator_clean = indices_list_to_indicator_vector(pr_indices_clean, n_train_samples)
             pr_indicator_id = indices_list_to_indicator_vector(pr_indices_id, n_train_samples)
             pr_indicator_ood = indices_list_to_indicator_vector(pr_indices_ood, n_train_samples)
@@ -939,7 +1076,7 @@ def main(gpu, cfg):
         pll_topk_acc_writer.write(f'{epoch + 1},'
                                   f'{num_pll_top1_match_id/(len(pr_indices_id)+1e-6):.3f},{num_pll_topk_match_id/(len(pr_indices_id)+1e-6):.3f},'
                                   f'{num_pll_top1_match_ood/(len(pr_indices_ood)+1e-6):.3f},{num_pll_topk_match_ood/(len(pr_indices_ood)+1e-6):.3f}')
-        if tqc_mode:
+        if tqc_replacement_mode:
             sibling_error_value = sibling_error_ratio if sibling_error_ratio is not None else -1.0
             effective_ratio = tqc_stats['effective_samples'] * 100.0 / max(n_train_samples, 1)
             tqc_epoch_writer.write(
@@ -991,6 +1128,51 @@ def main(gpu, cfg):
                 'sibling_error_ratio': sibling_error_ratio
             })
             write_metrics_json(result_dir, tqc_metrics_history)
+        elif tqc_aux_mode:
+            sibling_error_value = sibling_error_ratio if sibling_error_ratio is not None else -1.0
+            tqc_epoch_writer.write(
+                f'{epoch + 1},'
+                f'{safe_meter_avg(tqc_loss_total_meter):.6f},'
+                f'{safe_meter_avg(tqc_aux_loss_josnc_meter):.6f},'
+                f'{safe_meter_avg(tqc_aux_loss_tqc_raw_meter):.6f},'
+                f'{safe_meter_avg(tqc_loss_anchor_meter):.6f},'
+                f'{safe_meter_avg(tqc_loss_sb_hard_meter):.6f},'
+                f'{safe_meter_avg(tqc_aux_weighted_tqc_meter):.6f},'
+                f'{safe_meter_avg(tqc_aux_weighted_anchor_meter):.6f},'
+                f'{safe_meter_avg(tqc_aux_weighted_sb_hard_meter):.6f},'
+                f'{safe_meter_avg(tqc_anchor_acc_meter):.4f},'
+                f'{safe_meter_avg(tqc_sb_hard_acc_meter):.4f},'
+                f"{tqc_stats['anchor_used']},"
+                f"{tqc_stats['sibling_used']},"
+                f"{tqc_stats['ignored_skipped']},"
+                f"{tqc_stats['anchor_empty_batches']},"
+                f"{tqc_stats['sibling_empty_batches']},"
+                f'{curr_lr:.8f},'
+                f'{test_accuracy:.4f},'
+                f'{top5_accuracy:.4f},'
+                f'{sibling_error_value:.4f}'
+            )
+            tqc_metrics_history.append({
+                'epoch': epoch + 1,
+                'loss_total': safe_meter_avg(tqc_loss_total_meter),
+                'loss_josnc': safe_meter_avg(tqc_aux_loss_josnc_meter),
+                'loss_tqc_raw': safe_meter_avg(tqc_aux_loss_tqc_raw_meter),
+                'loss_anchor_raw': safe_meter_avg(tqc_loss_anchor_meter),
+                'loss_sb_hard_raw': safe_meter_avg(tqc_loss_sb_hard_meter),
+                'weighted_tqc': safe_meter_avg(tqc_aux_weighted_tqc_meter),
+                'weighted_anchor': safe_meter_avg(tqc_aux_weighted_anchor_meter),
+                'weighted_sb_hard': safe_meter_avg(tqc_aux_weighted_sb_hard_meter),
+                'anchor_acc': safe_meter_avg(tqc_anchor_acc_meter),
+                'sibling_boundary_hard_acc': safe_meter_avg(tqc_sb_hard_acc_meter),
+                'anchor_used': tqc_stats['anchor_used'],
+                'sibling_used': tqc_stats['sibling_used'],
+                'tqc_ignored_samples': tqc_stats['ignored_skipped'],
+                'lr': curr_lr,
+                'test_top1': test_accuracy,
+                'test_top5': top5_accuracy,
+                'sibling_error_ratio': sibling_error_ratio
+            })
+            write_metrics_json(result_dir, tqc_metrics_history)
 
     wrapup_training_statics(result_dir, best_accuracy)
 
@@ -1007,7 +1189,8 @@ def check_args(args):
         'integrate_mode', 'ood_criterion', 'conf_weight', 'threshold_generator',
         'cls4id', 'cls4ood', 'ncr_lossfunc', 'predefined_tau_clean',
         'eval_det', 'use_fp16', 'benchmark', 'ablation', 'save_model', 'save_ckpt',
-        'loss_mode', 'lambda_sb', 'soft_label_mix_alpha', 'soft_regularization_mu',
+        'loss_mode', 'lambda_tqc', 'lambda_sb', 'tqc_aux_use_anchor', 'tqc_aux_use_sibling',
+        'soft_label_mix_alpha', 'soft_regularization_mu',
         'tqc_group_path', 'tqc_soft_label_path', 'tqc_margin_path',
         'tqc_class_stats_path', 'tqc_sibling_path', 'tqc_stats_dir', 'clip_model',
         'K_s', 'K_f', 'tqc_r', 'domain_bottom', 'family_bottom', 'fine_high',
@@ -1065,8 +1248,12 @@ def parse_args():
                             'anchor_sibling_soft',
                             'anchor_sibling_mixed',
                             'anchor_sibling_hard_soft_reg',
+                            'josnc_tqc_hard_aux',
                         ])
+    parser.add_argument('--lambda-tqc', type=float, default=None)
     parser.add_argument('--lambda-sb', type=float, default=None)
+    parser.add_argument('--tqc-aux-use-anchor', type=parse_bool_arg, default=None)
+    parser.add_argument('--tqc-aux-use-sibling', type=parse_bool_arg, default=None)
     parser.add_argument('--soft-label-mix-alpha', type=float, default=None)
     parser.add_argument('--soft-regularization-mu', type=float, default=None)
     parser.add_argument('--tqc-group-path', type=str, default=None)
