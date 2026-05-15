@@ -379,6 +379,26 @@ def make_tqc_epoch_stats():
     }
 
 
+def make_training_checkpoint(epoch, q_model, k_model, optim, scaler,
+                             queue_keys, queue_logits, queue_ptr, tau_c, tau_o,
+                             best_epoch, best_accuracy):
+    return {
+        'checkpoint_version': 2,
+        'epoch': epoch,
+        'model_state_dict': q_model.state_dict(),
+        'k_model_state_dict': k_model.state_dict(),
+        'optim_state_dict': optim.state_dict(),
+        'scaler_state_dict': scaler.state_dict(),
+        'queue_keys': queue_keys,
+        'queue_logits': queue_logits,
+        'queue_ptr': int(queue_ptr),
+        'tau_c': tau_c,
+        'tau_o': tau_o,
+        'best_epoch': best_epoch,
+        'best_accuracy': best_accuracy,
+    }
+
+
 def gmm_based_threshold_generation(value_list, num_classes):
     values = np.array(value_list).reshape(-1, 1)
     gmm_metric = GaussianMixture(2)
@@ -459,10 +479,12 @@ def main(gpu, cfg):
         gt_indicator_id = indices_list_to_indicator_vector(gt_indices_id, n_train_samples)
         gt_indicator_ood = indices_list_to_indicator_vector(gt_indices_ood, n_train_samples)
         assert (gt_indicator_clean + gt_indicator_id + gt_indicator_ood == 1).all()
-        gt_train_labels = torch.tensor(np.array(dataset['train'].targets)).long()
+        gt_train_labels = torch.tensor(np.array(dataset['train'].targets)).long().to(device)
+        has_gt_train_labels = True
     else:
         gt_indicator_clean, gt_indicator_id, gt_indicator_ood = None, None, None
-        gt_train_labels = torch.zeros(n_train_samples).long()
+        gt_train_labels = None
+        has_gt_train_labels = False
 
     # Logging
     logger, result_dir = build_logger(cfg.log_root, cfg.dataset, cfg.log_proj, cfg.log_name)
@@ -516,10 +538,12 @@ def main(gpu, cfg):
     epoch_train_time = AverageMeter()
 
     # resume from checkpoint
+    checkpoint = None
     if 'ckpt_path' in cfg.keys() and cfg.ckpt_path is not None and os.path.isfile(cfg.ckpt_path):
-        logger.debug(f'---> loading {cfg.resume} <---')
+        logger.debug(f'---> loading {cfg.ckpt_path} <---')
         checkpoint = torch.load(cfg.ckpt_path, map_location=f'cuda:{gpu}')
         q_model.load_state_dict(checkpoint['model_state_dict'])
+        k_model.load_state_dict(checkpoint.get('k_model_state_dict', checkpoint['model_state_dict']))
         optim.load_state_dict(checkpoint['optim_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
         best_accuracy = checkpoint['best_accuracy']
@@ -546,6 +570,20 @@ def main(gpu, cfg):
     tau_c, tau_o = torch.zeros(cfg.n_classes).to(device), torch.zeros(cfg.n_classes).to(device)
 
     scaler = GradScaler()
+    if checkpoint is not None:
+        if 'queue_keys' in checkpoint:
+            queue_keys = checkpoint['queue_keys'].to(device)
+        if 'queue_logits' in checkpoint:
+            queue_logits = checkpoint['queue_logits'].to(device)
+        if 'queue_ptr' in checkpoint:
+            queue_ptr = int(checkpoint['queue_ptr']) % cfg.queue_length
+        if 'tau_c' in checkpoint:
+            tau_c = checkpoint['tau_c'].to(device)
+        if 'tau_o' in checkpoint:
+            tau_o = checkpoint['tau_o'].to(device)
+        if 'scaler_state_dict' in checkpoint:
+            scaler.load_state_dict(checkpoint['scaler_state_dict'])
+
     for epoch in range(start_epoch, cfg.epochs):
         if cfg.warmup_fc_only:
             if epoch == 0:
@@ -597,7 +635,7 @@ def main(gpu, cfg):
             if cfg.enable_progress_bar: pbar.set_postfix_str(f'TrainAcc: {train_accuracy_meter.avg:3.2f}%; TrainLoss: {train_loss_meter.avg:3.2f}')
 
             optim.zero_grad()
-            indices = sample['index']
+            indices = sample['index'].to(device)
             x1, x2 = sample['data']
             x1, x2 = x1.to(device), x2.to(device)
             y = sample['label'].to(device)
@@ -741,12 +779,14 @@ def main(gpu, cfg):
                     with torch.no_grad():
                         soft_labels = F.softmax(ema_logits1, dim=1)
                         if 1 < topK < cfg.n_classes:
-                            _, topK_indices1 = soft_labels.topk(1, dim=1, largest=True, sorted=True)     # top1
-                            num_pll_top1_match_id += (topK_indices1[idx_id].cpu().long() == gt_train_labels[indices[idx_id]].unsqueeze(dim=1).repeat(1, 1).long()).any(dim=1).sum()
-                            num_pll_top1_match_ood += (topK_indices1[idx_ood].cpu().long() == gt_train_labels[indices[idx_ood]].unsqueeze(dim=1).repeat(1, 1).long()).any(dim=1).sum()
+                            _, top1_indices = soft_labels.topk(1, dim=1, largest=True, sorted=True)     # top1
+                            if has_gt_train_labels:
+                                num_pll_top1_match_id += int((top1_indices[idx_id].long() == gt_train_labels[indices[idx_id]].unsqueeze(dim=1).repeat(1, 1).long()).any(dim=1).sum().item())
+                                num_pll_top1_match_ood += int((top1_indices[idx_ood].long() == gt_train_labels[indices[idx_ood]].unsqueeze(dim=1).repeat(1, 1).long()).any(dim=1).sum().item())
                             topK_probs, topK_indices1 = soft_labels.topk(topK, dim=1, largest=True, sorted=True)  # topK
-                            num_pll_topk_match_id += (topK_indices1[idx_id].cpu().long() == gt_train_labels[indices[idx_id]].unsqueeze(dim=1).repeat(1, topK).long()).any(dim=1).sum()
-                            num_pll_topk_match_ood += (topK_indices1[idx_ood].cpu().long() == gt_train_labels[indices[idx_ood]].unsqueeze(dim=1).repeat(1, 1).long()).any(dim=1).sum()
+                            if has_gt_train_labels:
+                                num_pll_topk_match_id += int((topK_indices1[idx_id].long() == gt_train_labels[indices[idx_id]].unsqueeze(dim=1).repeat(1, topK).long()).any(dim=1).sum().item())
+                                num_pll_topk_match_ood += int((topK_indices1[idx_ood].long() == gt_train_labels[indices[idx_ood]].unsqueeze(dim=1).repeat(1, 1).long()).any(dim=1).sum().item())
                             topK_conf = topK_probs.sum(dim=1)
 
                             estimated_labelsets1 = generate_label_sets(topK_indices1, cfg.n_classes)
@@ -932,17 +972,6 @@ def main(gpu, cfg):
                 print(f'*** tau_c for next epoch is {tau_c_scalar} (sampled in [0.75, 0.95])')
                 tau_c = torch.ones(cfg.n_classes).to(device) * tau_c_scalar
 
-        # save checkpoint
-        if cfg.save_ckpt:
-            ckpt_file_suffix = f'warmup_{epoch + 1:02d}th_epoch' if epoch < cfg.warmup_epochs and SAVE_WARMUP_CKPT else 'latest'
-            save_checkpoint({
-                'epoch': epoch,
-                'model_state_dict': q_model.state_dict(),
-                'optim_state_dict': optim.state_dict(),
-                'best_epoch': best_epoch,
-                'best_accuracy': best_accuracy
-            }, filename=os.path.join(result_dir, f'checkpoint-{ckpt_file_suffix}.pth'))
-
         # evaluate this epoch
         top5_accuracy = None
         sibling_error_ratio = None
@@ -973,15 +1002,26 @@ def main(gpu, cfg):
             if cfg.save_model:
                 torch.save(q_model.state_dict(), f'{result_dir}/model_best.pth')
             if tqc_mode:
-                save_checkpoint({
-                    'epoch': epoch,
-                    'model_state_dict': q_model.state_dict(),
-                    'optim_state_dict': optim.state_dict(),
-                    'best_epoch': best_epoch,
-                    'best_accuracy': best_accuracy
-                }, filename=os.path.join(result_dir, 'best_checkpoint.pth'))
+                save_checkpoint(
+                    make_training_checkpoint(
+                        epoch, q_model, k_model, optim, scaler,
+                        queue_keys, queue_logits, queue_ptr, tau_c, tau_o,
+                        best_epoch, best_accuracy
+                    ),
+                    filename=os.path.join(result_dir, 'best_checkpoint.pth')
+                )
         if cfg.save_model:
             torch.save(q_model.state_dict(), f'{result_dir}/model_last.pth')
+        if cfg.save_ckpt:
+            ckpt_file_suffix = f'warmup_{epoch + 1:02d}th_epoch' if epoch < cfg.warmup_epochs and SAVE_WARMUP_CKPT else 'latest'
+            save_checkpoint(
+                make_training_checkpoint(
+                    epoch, q_model, k_model, optim, scaler,
+                    queue_keys, queue_logits, queue_ptr, tau_c, tau_o,
+                    best_epoch, best_accuracy
+                ),
+                filename=os.path.join(result_dir, f'checkpoint-{ckpt_file_suffix}.pth')
+            )
 
         epoch_runtime = time.time() - epoch_start
         if tqc_mode:
@@ -1073,9 +1113,12 @@ def main(gpu, cfg):
             test_acc_writer.write(f'{epoch + 1},{test_accuracy:.3f},{top5_accuracy:.3f}')
         else:
             test_acc_writer.write(f'{epoch + 1},{test_accuracy:.3f}')
-        pll_topk_acc_writer.write(f'{epoch + 1},'
-                                  f'{num_pll_top1_match_id/(len(pr_indices_id)+1e-6):.3f},{num_pll_topk_match_id/(len(pr_indices_id)+1e-6):.3f},'
-                                  f'{num_pll_top1_match_ood/(len(pr_indices_ood)+1e-6):.3f},{num_pll_topk_match_ood/(len(pr_indices_ood)+1e-6):.3f}')
+        if has_gt_train_labels:
+            pll_topk_acc_writer.write(f'{epoch + 1},'
+                                      f'{num_pll_top1_match_id/(len(pr_indices_id)+1e-6):.3f},{num_pll_topk_match_id/(len(pr_indices_id)+1e-6):.3f},'
+                                      f'{num_pll_top1_match_ood/(len(pr_indices_ood)+1e-6):.3f},{num_pll_topk_match_ood/(len(pr_indices_ood)+1e-6):.3f}')
+        else:
+            pll_topk_acc_writer.write(f'{epoch + 1},-,-,-,-')
         if tqc_replacement_mode:
             sibling_error_value = sibling_error_ratio if sibling_error_ratio is not None else -1.0
             effective_ratio = tqc_stats['effective_samples'] * 100.0 / max(n_train_samples, 1)
